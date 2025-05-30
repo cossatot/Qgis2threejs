@@ -229,6 +229,12 @@ class MaterialManager(DataManager):
         transp_background = True
         mtl = (self.SPRITE_IMAGE, None, opacity, False, (path_url, transp_background))
         return self._index(mtl)
+        
+    def getImagePlaneIndex(self, path_url, opacity=1, doubleSide=True):
+        # Use the IMAGE_FILE type with doubleSide=True for georeferenced images
+        transp_background = True
+        mtl = (self.IMAGE_FILE, None, opacity, doubleSide, (path_url, transp_background, True))
+        return self._index(mtl)
 
     def build(self, index, filepath=None, url=None, base64=False):
 

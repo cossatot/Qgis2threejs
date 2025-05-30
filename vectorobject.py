@@ -405,6 +405,145 @@ class ModelFileType(PointTypeBase):
         return d
 
 
+
+
+class GeorefImageType(PolygonTypeBase):
+
+    name = "Georeferenced Image"
+    pids = [PID.PATH, PID.OP, PID.C]  # Added color for fallback
+    experimental = True
+
+    def setupWidgets(self, ppage):
+        # This type is meant to be used programmatically via the georeferencer dialog
+        filterString = "Images (*.png *.jpg *.gif *.bmp);;All files (*.*)"
+        ppage.setupWidgets(filepath={"name": "Image file", "filterString": filterString, "allowURL": True},
+                          color=True)  # Enable color as fallback
+
+    def material(self, feat):
+        from .utils import logMessage
+        print("DEBUG: GeorefImageType.material() called")
+        logMessage("GeorefImageType.material() called", warning=True)
+        
+        # Use a semi-transparent red color for testing the polygon geometry
+        # This will confirm if the polygon itself is being created correctly
+        return {"idx": self.mtlManager.getMeshBasicMaterialIndex("0xff0000", 0.5, True)}  # Semi-transparent red
+
+    def geometry(self, feat, geom):
+        # Debug logging
+        from .utils import logMessage
+        from .geometry import TINGeometry
+        
+        # Use direct print for easier debugging
+        print("DEBUG: GeorefImageType.geometry() called")
+        logMessage("GeorefImageType.geometry() - Adding UV coordinates for texture mapping", warning=True)
+        
+        # Create a TIN geometry object for proper formatting
+        tin = TINGeometry()
+        
+        # Get corners from layer properties if available
+        try:
+            # Search through all layers for our custom properties
+            for layer_id, layer in self.settings.layers.items():
+                print(f"DEBUG: Checking layer {layer_id} for custom properties")
+                custom_props = layer.properties.custom if hasattr(layer.properties, "custom") else None
+                if custom_props and "imageCorners" in custom_props:
+                    corners = custom_props["imageCorners"]
+                    print(f"DEBUG: Found corners in layer {layer_id}: {corners}")
+                    logMessage(f"Found corners in layer {layer_id}: {corners}", warning=True)
+                    
+                    # Add the triangles to our TIN geometry
+                    # First triangle (corners 0, 1, 2)
+                    tin.triangles.append([
+                        corners[0],  # Top-left
+                        corners[1],  # Top-right
+                        corners[2]   # Bottom-right
+                    ])
+                    
+                    # Second triangle (corners 0, 2, 3)
+                    tin.triangles.append([
+                        corners[0],  # Top-left
+                        corners[2],  # Bottom-right
+                        corners[3]   # Bottom-left
+                    ])
+                    
+                    # Convert to dictionary format
+                    d = tin.toDict(flat=True)
+                    print(f"DEBUG: TIN dictionary created: {d}")
+                    
+                    # Add UV coordinates for texture mapping
+                    # Format: vertices=[v1x,v1y,v1z, v2x,v2y,v2z, ...], 
+                    #         uv=[[u1,v1], [u2,v2], ...]
+                    d["uvs"] = [
+                        # Coordinates match triangle vertices in the same order
+                        [0, 0],  # Top-left (0)
+                        [1, 0],  # Top-right (1)
+                        [1, 1],  # Bottom-right (2)
+                        [0, 1]   # Bottom-left (3)
+                    ]
+                    
+                    # Try alternative styles of specifying texture coordinates
+                    d["uv"] = d["uvs"]  # Some renderers may expect "uv" instead of "uvs"
+                    
+                    # Add texture flag to indicate this needs a texture
+                    d["textured"] = True
+                    d["uvsNeedUpdate"] = True
+                    
+                    # Add image path directly to geometry in case that's needed
+                    d["image_path"] = feat.prop(PID.PATH)
+                    
+                    print(f"DEBUG: Final geometry with UVs: {d}")
+                    logMessage(f"Created geometry with UVs for texture mapping", warning=True)
+                    return d
+        except Exception as e:
+            logMessage(f"Error in geometry: {str(e)}", warning=True)
+        
+        # Fallback to simple implementation if no corners found
+        print("DEBUG: Using fallback geometry (no corners found)")
+        logMessage("Using fallback geometry (no corners found)", warning=True)
+        
+        # Create a simple quad centered at the point location
+        center = geom.toList()[0]
+        print(f"DEBUG: Center point: {center}")
+        size = self.defaultValue()
+        half_size = size / 2
+        
+        # Create simple vertices for a horizontal square
+        pt1 = [center[0] - half_size, center[1] - half_size, center[2]]  # Bottom-left
+        pt2 = [center[0] + half_size, center[1] - half_size, center[2]]  # Bottom-right
+        pt3 = [center[0] + half_size, center[1] + half_size, center[2]]  # Top-right
+        pt4 = [center[0] - half_size, center[1] + half_size, center[2]]  # Top-left
+        
+        # Add triangles to the TIN
+        tin.triangles.append([pt4, pt3, pt2])  # First triangle
+        tin.triangles.append([pt4, pt2, pt1])  # Second triangle
+        
+        # Convert to dictionary format
+        d = tin.toDict(flat=True)
+        print(f"DEBUG: Fallback TIN dictionary: {d}")
+        
+        # Add UV coordinates for texture mapping
+        d["uvs"] = [
+            [0, 0],  # Top-left (4)
+            [1, 0],  # Top-right (3)
+            [1, 1],  # Bottom-right (2)
+            [0, 1]   # Bottom-left (1)
+        ]
+        
+        # Try alternative styles of specifying texture coordinates
+        d["uv"] = d["uvs"]  # Some renderers may expect "uv" instead of "uvs"
+        
+        # Add texture flag to indicate this needs a texture
+        d["textured"] = True
+        d["uvsNeedUpdate"] = True
+        
+        # Add image path directly to geometry in case that's needed
+        d["image_path"] = feat.prop(PID.PATH)
+        
+        print(f"DEBUG: Final fallback geometry: {d}")
+        logMessage(f"Created fallback geometry with UVs for texture mapping", warning=True)
+        return d
+
+
 class ObjectType:
 
     # point
@@ -416,6 +555,7 @@ class ObjectType:
     Plane = PlaneType
     Point = PointType
     Billboard = BillboardType
+    GeorefImage = GeorefImageType
     ModelFile = ModelFileType
 
     # line
@@ -432,7 +572,8 @@ class ObjectType:
     Overlay = OverlayType
 
     Grouped = {LayerType.POINT: [SphereType, CylinderType, ConeType, BoxType, DiskType,
-                                 PlaneType, PointType, BillboardType, ModelFileType],
+                                 PlaneType, PointType, BillboardType, 
+                                 GeorefImage, ModelFileType],
                LayerType.LINESTRING: [LineType, ThickLineType, PipeType, ConeLineType, BoxLineType, WallType],
                LayerType.POLYGON: [PolygonType, ExtrudedType, OverlayType]
                }

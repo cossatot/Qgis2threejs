@@ -3485,6 +3485,9 @@ class Q3DPointLayer extends Q3DVectorLayer {
 		else if (objType == "3D Model") {
 			return this.buildModels(features, startIndex);
 		}
+		else if (objType == "Georeferenced Image") {
+			return this.buildGeorefImages(features, startIndex);
+		}
 
 		var unitGeom, transform;
 		if (this.cachedGeometryType === objType) {
@@ -3686,6 +3689,91 @@ class Q3DPointLayer extends Q3DVectorLayer {
 
 	buildLabels(features) {
 		super.buildLabels(features, function (f) { return f.geom.pts; });
+	}
+
+	
+	buildGeorefImages(features, startIndex) {
+		var sz = this.sceneData.zScale;
+
+		features.forEach(function (f, fidx) {
+			console.log("Building georeferenced image", f);
+			var material = this.materials.get(f.mtl.idx);
+			
+			var meshes = [];
+			for (var i = 0; i < f.geom.pts.length; i++) {
+				console.log("Geometry data:", f.geom);
+				if (!f.geom.georef || !f.geom.corners || f.geom.corners.length != 4) {
+					// Fallback to simple plane if georeferencing data is missing
+					var geometry = new THREE.PlaneBufferGeometry(1, 1, 1, 1);
+					var plane = new THREE.Mesh(geometry, material.mtl);
+					
+					// Use default scale and orientation
+					plane.scale.set(f.geom.w, f.geom.h * sz, 1);
+					plane.rotateOnWorldAxis(Q3D.uv.i, -Math.PI/2); // Vertical (90 degrees)
+					
+					// Set position
+					plane.position.fromArray(f.geom.pts[i]);
+					
+					plane.userData.properties = f.prop;
+					meshes.push(plane);
+					continue;
+				}
+				
+				// Create geometry for georeferenced image
+				// We need a custom geometry where we can specify exact vertex positions
+				var geometry = new THREE.BufferGeometry();
+				
+				// Extract corner coordinates
+				var corners = f.geom.corners;
+				var positions = [];
+				var uvs = [];
+				
+				// Define the corners positions (in 3D space)
+				positions.push(
+					corners[0][0], corners[0][1], corners[0][2] * sz,  // top-left
+					corners[1][0], corners[1][1], corners[1][2] * sz,  // top-right
+					corners[3][0], corners[3][1], corners[3][2] * sz,  // bottom-left
+					corners[2][0], corners[2][1], corners[2][2] * sz   // bottom-right
+				);
+				
+				// UV coordinates for texture mapping (0,0 is top-left, 1,1 is bottom-right)
+				uvs.push(
+					0, 0,  // top-left
+					1, 0,  // top-right
+					0, 1,  // bottom-left
+					1, 1   // bottom-right
+				);
+				
+				// Define indices for the triangles (two triangles forming a quad)
+				var indices = [
+					0, 1, 2,  // first triangle
+					2, 1, 3   // second triangle
+				];
+				
+				// Set attributes for the buffer geometry
+				geometry.setIndex(indices);
+				geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+				geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+				geometry.computeVertexNormals();
+				
+				// Create mesh with the geometry and material
+				var mesh = new THREE.Mesh(geometry, material.mtl);
+				
+				// Add properties
+				mesh.userData.properties = f.prop;
+				
+				meshes.push(mesh);
+			}
+			
+			// When the texture is loaded, update matrices
+			material.callbackOnLoad(function () {
+				for (var i = 0; i < meshes.length; i++) {
+					meshes[i].updateMatrixWorld();
+				}
+			});
+			
+			this.addFeature(fidx + startIndex, f, meshes);
+		}, this);
 	}
 
 }
