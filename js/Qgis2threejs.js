@@ -2153,6 +2153,17 @@ class Q3DMaterial {
 				delete m.image.base64;
 			}
 			opt.map.anisotropy = Q3D.Config.texture.anisotropy;
+			
+			// Set texture wrapping for automatic UV mapping
+			opt.map.wrapS = THREE.ClampToEdgeWrap;
+			opt.map.wrapT = THREE.ClampToEdgeWrap;
+			opt.map.minFilter = THREE.LinearFilter;
+			opt.map.magFilter = THREE.LinearFilter;
+			opt.map.generateMipmaps = false;
+			
+			// Preserve aspect ratio - don't repeat or stretch
+			opt.map.repeat.set(1, 1);
+			opt.map.offset.set(0, 0);
 		}
 
 		if (m.c !== undefined) opt.color = m.c;
@@ -3153,6 +3164,18 @@ class Q3DDEMLayer extends Q3DMapLayer {
 			opt = {};
 			opt.map = new THREE.CanvasTexture(canvas);
 			opt.map.anisotropy = Q3D.Config.texture.anisotropy;
+			
+			// Set texture wrapping for automatic UV mapping
+			opt.map.wrapS = THREE.ClampToEdgeWrap;
+			opt.map.wrapT = THREE.ClampToEdgeWrap;
+			opt.map.minFilter = THREE.LinearFilter;
+			opt.map.magFilter = THREE.LinearFilter;
+			opt.map.generateMipmaps = false;
+			
+			// Preserve aspect ratio - don't repeat or stretch
+			opt.map.repeat.set(1, 1);
+			opt.map.offset.set(0, 0);
+			
 			opt.transparent = true;
 
 			mtl = undefined;
@@ -4039,6 +4062,12 @@ class Q3DPolygonLayer extends Q3DVectorLayer {
 				var geom = new THREE.BufferGeometry();
 				geom.setAttribute("position", new THREE.Float32BufferAttribute(f.geom.triangles.v, 3));
 				geom.setIndex(f.geom.triangles.f);
+				
+				// Add automatic UV mapping for textures
+				if (f.geom.autoUV) {
+					Q3D.Utils.setBufferGeometryAutoUV(geom, f.geom.reverseUV);
+				}
+				
 				geom = new THREE.Geometry().fromBufferGeometry(geom); // Flat shading doesn't work with combination of
 																	// BufferGeometry and Lambert/Toon material.
 				return new THREE.Mesh(geom, materials.mtl(f.mtl.idx));
@@ -4120,6 +4149,12 @@ class Q3DPolygonLayer extends Q3DVectorLayer {
 				var geom = new THREE.BufferGeometry();
 				geom.setIndex(f.geom.triangles.f);
 				geom.setAttribute("position", new THREE.Float32BufferAttribute(f.geom.triangles.v, 3));
+				
+				// Add automatic UV mapping for textures
+				if (f.geom.autoUV) {
+					Q3D.Utils.setBufferGeometryAutoUV(geom, f.geom.reverseUV);
+				}
+				
 				geom.computeVertexNormals();
 
 				var mesh = new THREE.Mesh(geom, materials.mtl(f.mtl.idx));
@@ -4388,6 +4423,168 @@ Q3D.Utils.setGeometryUVs = function (geom, base_width, base_height) {
 		face = geom.faces[i];
 		geom.faceVertexUvs[0].push([uvs[face.a], uvs[face.b], uvs[face.c]]);
 	}
+};
+
+Q3D.Utils.setBufferGeometryAutoUV = function (geom, reverseUV) {
+	var positionAttribute = geom.getAttribute("position");
+	if (!positionAttribute) return;
+	
+	var vertices = positionAttribute.array;
+	var vertexCount = positionAttribute.count;
+	
+	// Create vertex objects with 3D coordinates
+	var vertexPositions = [];
+	for (var i = 0; i < vertexCount; i++) {
+		vertexPositions.push({
+			x: vertices[i * 3],
+			y: vertices[i * 3 + 1], 
+			z: vertices[i * 3 + 2],
+			index: i
+		});
+	}
+	
+	// Find the highest Z value (top of polygon)
+	var maxZ = Math.max.apply(Math, vertexPositions.map(function(v) { return v.z; }));
+	var minZ = Math.min.apply(Math, vertexPositions.map(function(v) { return v.z; }));
+	var tolerance = Math.max(0.001, (maxZ - minZ) * 0.1); // Adaptive tolerance
+	
+	// Find all vertices that are at or near the top
+	var topVertices = vertexPositions.filter(function(v) {
+		return Math.abs(v.z - maxZ) < tolerance;
+	});
+	
+	// Find all vertices that are at or near the bottom  
+	var bottomVertices = vertexPositions.filter(function(v) {
+		return Math.abs(v.z - minZ) < tolerance;
+	});
+	
+	if (topVertices.length < 2 || bottomVertices.length < 2) {
+		// Fallback to bounding box approach if we can't find clear top/bottom vertices
+		Q3D.Utils.setBufferGeometryBoundingBoxUV(geom, reverseUV);
+		return;
+	}
+	
+	// Find the leftmost and rightmost of the top vertices (these map to top of image)
+	var leftTopVertex = topVertices.reduce(function(min, v) {
+		return v.x < min.x ? v : min;
+	});
+	var rightTopVertex = topVertices.reduce(function(max, v) {
+		return v.x > max.x ? v : max;
+	});
+	
+	// Find the leftmost and rightmost of the bottom vertices (these map to bottom of image)
+	var leftBottomVertex = bottomVertices.reduce(function(min, v) {
+		return v.x < min.x ? v : min;
+	});
+	var rightBottomVertex = bottomVertices.reduce(function(max, v) {
+		return v.x > max.x ? v : max;
+	});
+	
+	// Define the 4 corner mappings based on Z-height (not bounding box)
+	// Top vertices of polygon -> top of image (V=0)
+	// Bottom vertices of polygon -> bottom of image (V=1)
+	var cornerMappings = {};
+	
+	if (!reverseUV) {
+		// Normal: left top -> (0,1), right top -> (1,1), left bottom -> (0,0), right bottom -> (1,0)
+		cornerMappings[leftTopVertex.index] = [0, 1];
+		cornerMappings[rightTopVertex.index] = [1, 1];
+		cornerMappings[leftBottomVertex.index] = [0, 0];
+		cornerMappings[rightBottomVertex.index] = [1, 0];
+	} else {
+		// Reversed: right top -> (0,1), left top -> (1,1), right bottom -> (0,0), left bottom -> (1,0)
+		cornerMappings[rightTopVertex.index] = [0, 1];
+		cornerMappings[leftTopVertex.index] = [1, 1];
+		cornerMappings[rightBottomVertex.index] = [0, 0];
+		cornerMappings[leftBottomVertex.index] = [1, 0];
+	}
+	
+	// Create UV mapping using bilinear interpolation
+	var uvs = new Float32Array(vertexCount * 2);
+	
+	for (var i = 0; i < vertexCount; i++) {
+		var vertex = vertexPositions[i];
+		
+		// Check if this vertex is one of our corner mappings
+		if (cornerMappings[i]) {
+			uvs[i * 2] = cornerMappings[i][0];
+			uvs[i * 2 + 1] = cornerMappings[i][1];
+		} else {
+			// For interior vertices, interpolate based on position relative to the quad
+			var topX = leftTopVertex.x + (rightTopVertex.x - leftTopVertex.x) * 
+					   ((vertex.x - leftTopVertex.x) / (rightTopVertex.x - leftTopVertex.x || 1));
+			var bottomX = leftBottomVertex.x + (rightBottomVertex.x - leftBottomVertex.x) * 
+						  ((vertex.x - leftBottomVertex.x) / (rightBottomVertex.x - leftBottomVertex.x || 1));
+			
+			// Interpolate U coordinate (horizontal position)
+			var u = (vertex.x - leftTopVertex.x) / (rightTopVertex.x - leftTopVertex.x || 1);
+			u = Math.max(0, Math.min(1, u));
+			
+			// Interpolate V coordinate (vertical position based on Z) - flipped
+			var v = (vertex.z - minZ) / (maxZ - minZ || 1);
+			v = Math.max(0, Math.min(1, v));
+			
+			if (reverseUV) {
+				u = 1 - u;
+			}
+			
+			uvs[i * 2] = u;
+			uvs[i * 2 + 1] = v;
+		}
+	}
+	
+	geom.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+};
+
+Q3D.Utils.setBufferGeometryBoundingBoxUV = function (geom, reverseUV) {
+	// Fallback method using simple bounding box
+	var positionAttribute = geom.getAttribute("position");
+	if (!positionAttribute) return;
+	
+	var vertices = positionAttribute.array;
+	var vertexCount = positionAttribute.count;
+	
+	// Calculate bounding box
+	var minX = Infinity, maxX = -Infinity;
+	var minY = Infinity, maxY = -Infinity;
+	
+	for (var i = 0; i < vertexCount; i++) {
+		var x = vertices[i * 3];
+		var y = vertices[i * 3 + 1];
+		
+		minX = Math.min(minX, x);
+		maxX = Math.max(maxX, x);
+		minY = Math.min(minY, y);
+		maxY = Math.max(maxY, y);
+	}
+	
+	var uvs = new Float32Array(vertexCount * 2);
+	
+	for (var i = 0; i < vertexCount; i++) {
+		var x = vertices[i * 3];
+		var y = vertices[i * 3 + 1];
+		
+		// Normalize coordinates to [0,1]
+		var normX = (x - minX) / (maxX - minX);
+		var normY = (y - minY) / (maxY - minY);
+		
+		var u, v;
+		
+		if (!reverseUV) {
+			// Apply the 90-degree rotation from your working example:
+			u = 1 - normY;  // Y becomes inverted U
+			v = normX;      // X becomes V
+		} else {
+			// Reversed mapping  
+			u = normY;      // Y becomes U
+			v = normX;      // X becomes V
+		}
+		
+		uvs[i * 2] = u;
+		uvs[i * 2 + 1] = v;
+	}
+	
+	geom.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
 };
 
 

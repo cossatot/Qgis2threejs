@@ -269,16 +269,33 @@ class PolygonType(PolygonTypeBase):
     """3d polygon support: yes"""
 
     name = "Polygon"
-    pids = [PID.C, PID.OP]
+    pids = [PID.C, PID.OP, PID.M0, PID.M1]
 
     def setupWidgets(self, ppage):
-        ppage.setupWidgets()
+        ppage.setupWidgets(mtlItems=[
+            {"name": "Texture Image", "type": PropertyWidget.FILEPATH, 
+             "filterString": "Images (*.png *.jpg *.jpeg *.gif *.bmp *.tif *.tiff);;All files (*.*)",
+             "allowURL": True},
+            {"name": "Reverse UV Mapping", "type": PropertyWidget.CHECKBOX, "defVal": False}
+        ])
 
     def material(self, feat):
-        return {"idx": self.mtlManager.getMeshFlatMaterialIndex(feat.prop(PID.C), feat.prop(PID.OP), True)}
+        # Check if texture image path is provided
+        texture_path = feat.prop(PID.M0)
+        if texture_path and texture_path.strip():
+            return {"idx": self.mtlManager.getImageFileIndex(texture_path, feat.prop(PID.OP), doubleSide=True, shading=False)}
+        else:
+            return {"idx": self.mtlManager.getMeshFlatMaterialIndex(feat.prop(PID.C), feat.prop(PID.OP), True)}
 
     def geometry(self, feat, geom):
         g = geom.toDict(flat=True)
+        
+        # Add UV mapping flag for texture application
+        texture_path = feat.prop(PID.M0)
+        if texture_path and texture_path.strip():
+            g["autoUV"] = True
+            g["reverseUV"] = feat.prop(PID.M1) or False
+        
         return g
 
 
