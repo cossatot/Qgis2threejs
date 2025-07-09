@@ -143,6 +143,12 @@ class ColorWidgetFunc(WidgetFuncBase):
         self.widget.expression.setLayer(self.mapLayer)
 
         self.widget.toolButton.setIcon(QgsApplication.getThemeIcon("mIconColorSwatches.svg"))
+        
+        # Set default selection to Feature style if no specific default is provided
+        defaultSelection = options.get("defVal", ColorWidgetFunc.FEATURE)
+        index = self.widget.comboBox.findData(defaultSelection)
+        if index != -1:
+            self.widget.comboBox.setCurrentIndex(index)
 
     def comboBoxSelectionChanged(self, index):
         itemData = self.widget.comboBox.itemData(index)

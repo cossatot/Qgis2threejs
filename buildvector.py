@@ -225,8 +225,27 @@ class VectorLayer:
         for pid in pids:
             name = PID.PID_NAME_DICT[pid]
             p = self.properties.get(name)
+            
+            # Provide default values for missing properties
             if p is None:
-                continue
+                # For color property, provide default to use feature style
+                if pid == PID.C:
+                    p = {
+                        "type": PropertyWidget.COLOR,
+                        "comboData": ColorWidgetFunc.FEATURE,
+                        "comboText": "Feature style", 
+                        "editText": ""
+                    }
+                # For opacity property, provide default full opacity
+                elif pid == PID.OP:
+                    p = {
+                        "type": PropertyWidget.OPACITY,
+                        "comboData": OpacityWidgetFunc.FEATURE,
+                        "comboText": "Feature style",
+                        "editText": ""
+                    }
+                else:
+                    continue
 
             val = None
             if isinstance(p, str):
